@@ -3,18 +3,20 @@ import os
 import math
 import random
 
+from shiboken6 import isValid
+
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget,
     QGraphicsView, QGraphicsScene,
     QGraphicsPixmapItem, QGraphicsLineItem,
     QFileDialog, QPushButton,
     QVBoxLayout, QHBoxLayout,
-    QLabel, QSlider, QSpinBox
+    QLabel, QSlider, QSpinBox, QDoubleSpinBox
 )
 from PySide6.QtGui import (
     QPixmap, QPen, QPainter, QKeySequence
 )
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, QSignalBlocker
 
 
 class GraphicsView(QGraphicsView):
@@ -37,14 +39,14 @@ class GraphicsView(QGraphicsView):
         else:
             # 点到空白处，准备拖动视图
             self.is_panning = True
-            self.last_pos = event.pos()
+            self.last_pos = event.position().toPoint()
             self.setCursor(Qt.OpenHandCursor)
 
     def mouseMoveEvent(self, event):
         if self.is_panning:
             # 拖动视图
-            delta = event.pos() - self.last_pos
-            self.last_pos = event.pos()
+            delta = event.position().toPoint() - self.last_pos
+            self.last_pos = event.position().toPoint()
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
         else:
@@ -83,13 +85,16 @@ class ImageEditor(QMainWindow):
         self.setWindowTitle("图像合成 / 数据生成工具")
         self.resize(1300, 850)
 
-        self.scene = QGraphicsScene()
+        self.scene = QGraphicsScene(self)
         self.view = GraphicsView(self.scene)
 
         self.background_item = None
         self.line_item = None
+        self.active_line_item = None
+        self.active_defect_item = None
 
         self._init_ui()
+        self.statusBar().showMessage("就绪")
         self._load_default_background()
 
     def _init_ui(self):
@@ -112,10 +117,33 @@ class ImageEditor(QMainWindow):
 
         side.addWidget(QLabel("线角度（°）"))
         self.angle_slider = QSlider(Qt.Horizontal)
-        self.angle_slider.setRange(-90, 90)
+        self.angle_slider.setRange(-900, 900)
         self.angle_slider.setValue(0)
-        self.angle_slider.valueChanged.connect(self.update_line_angle)
+        self.angle_slider.valueChanged.connect(self.on_angle_slider_changed)
         side.addWidget(self.angle_slider)
+
+        self.angle_spin = QDoubleSpinBox()
+        self.angle_spin.setRange(-90.0, 90.0)
+        self.angle_spin.setDecimals(1)
+        self.angle_spin.setSingleStep(0.1)
+        self.angle_spin.setValue(0.0)
+        self.angle_spin.valueChanged.connect(self.on_angle_spin_changed)
+        side.addWidget(self.angle_spin)
+
+        side.addWidget(QLabel("异物角度（°）"))
+        self.defect_angle_slider = QSlider(Qt.Horizontal)
+        self.defect_angle_slider.setRange(0, 3600)
+        self.defect_angle_slider.setValue(0)
+        self.defect_angle_slider.valueChanged.connect(self.on_defect_angle_slider_changed)
+        side.addWidget(self.defect_angle_slider)
+
+        self.defect_angle_spin = QDoubleSpinBox()
+        self.defect_angle_spin.setRange(0.0, 360.0)
+        self.defect_angle_spin.setDecimals(1)
+        self.defect_angle_spin.setSingleStep(0.1)
+        self.defect_angle_spin.setValue(0.0)
+        self.defect_angle_spin.valueChanged.connect(self.on_defect_angle_spin_changed)
+        side.addWidget(self.defect_angle_spin)
 
         btn_defect = QPushButton("添加异物")
         btn_defect.clicked.connect(self.add_defect)
@@ -138,6 +166,8 @@ class ImageEditor(QMainWindow):
         save = self.addAction("Save")
         save.setShortcut(QKeySequence.Save)
         save.triggered.connect(self.save_image)
+
+        self.scene.selectionChanged.connect(self.on_scene_selection_changed)
 
     # ---------------- 背景 ----------------
     def _load_default_background(self):
@@ -202,10 +232,101 @@ class ImageEditor(QMainWindow):
         )
         self.line_item.setZValue(10)
         self.scene.addItem(self.line_item)
+        self.scene.clearSelection()
+        self.line_item.setSelected(True)
+        self.active_line_item = self.line_item
+        self.set_angle_controls_from_line(self.line_item)
 
-    def update_line_angle(self, angle):
-        if self.line_item:
-            self.line_item.setRotation(angle)
+    def get_active_line_item(self):
+        items = self.scene.selectedItems()
+        for item in items:
+            if isinstance(item, QGraphicsLineItem):
+                return item
+        return self.active_line_item or self.line_item
+
+    def get_active_defect_item(self):
+        items = self.scene.selectedItems()
+        for item in items:
+            if isinstance(item, QGraphicsPixmapItem) and item is not self.background_item:
+                return item
+        return self.active_defect_item
+
+    def set_angle_controls_from_line(self, line_item):
+        if not line_item:
+            return
+        angle = float(line_item.rotation())
+        angle = max(-90.0, min(90.0, angle))
+        with QSignalBlocker(self.angle_slider):
+            self.angle_slider.setValue(int(round(angle * 10)))
+        with QSignalBlocker(self.angle_spin):
+            self.angle_spin.setValue(angle)
+
+    def set_defect_angle_controls_from_item(self, item):
+        if not item:
+            return
+        angle = float(item.rotation()) % 360.0
+        with QSignalBlocker(self.defect_angle_slider):
+            self.defect_angle_slider.setValue(int(round(angle * 10)))
+        with QSignalBlocker(self.defect_angle_spin):
+            self.defect_angle_spin.setValue(angle)
+
+    def on_scene_selection_changed(self):
+        if not isValid(self.scene):
+            return
+        active_line = None
+        try:
+            items = self.scene.selectedItems()
+        except RuntimeError:
+            return
+        for item in items:
+            if isinstance(item, QGraphicsLineItem):
+                active_line = item
+                break
+        if active_line is not None:
+            self.active_line_item = active_line
+            self.set_angle_controls_from_line(active_line)
+
+        active_defect = None
+        for item in items:
+            if isinstance(item, QGraphicsPixmapItem) and item is not self.background_item:
+                active_defect = item
+                break
+        if active_defect is not None:
+            self.active_defect_item = active_defect
+            self.set_defect_angle_controls_from_item(active_defect)
+
+    def on_angle_slider_changed(self, value):
+        angle = value / 10.0
+        with QSignalBlocker(self.angle_spin):
+            self.angle_spin.setValue(angle)
+        line = self.get_active_line_item()
+        if line:
+            line.setRotation(angle)
+
+    def on_angle_spin_changed(self, angle):
+        with QSignalBlocker(self.angle_slider):
+            self.angle_slider.setValue(int(round(angle * 10)))
+        line = self.get_active_line_item()
+        if line:
+            line.setRotation(angle)
+
+    def on_defect_angle_slider_changed(self, value):
+        angle = (value / 10.0) % 360.0
+        with QSignalBlocker(self.defect_angle_spin):
+            self.defect_angle_spin.setValue(angle)
+        item = self.get_active_defect_item()
+        if item:
+            item.setTransformOriginPoint(item.boundingRect().center())
+            item.setRotation(angle)
+
+    def on_defect_angle_spin_changed(self, angle):
+        angle = float(angle) % 360.0
+        with QSignalBlocker(self.defect_angle_slider):
+            self.defect_angle_slider.setValue(int(round(angle * 10)))
+        item = self.get_active_defect_item()
+        if item:
+            item.setTransformOriginPoint(item.boundingRect().center())
+            item.setRotation(angle)
 
     # ---------------- 异物 ----------------
     def add_defect(self):
@@ -223,37 +344,88 @@ class ImageEditor(QMainWindow):
         item = QGraphicsPixmapItem(pix)
         item.setScale(0.2)
         item.setZValue(20)
+        item.setTransformOriginPoint(item.boundingRect().center())
 
         item.setFlags(
             QGraphicsPixmapItem.ItemIsMovable |
             QGraphicsPixmapItem.ItemIsSelectable
         )
 
-        item.setPos(self.scene.sceneRect().center())
+        center = self.scene.sceneRect().center()
+        origin = item.transformOriginPoint()
+        item.setPos(center.x() - origin.x(), center.y() - origin.y())
         self.scene.addItem(item)
+        self.scene.clearSelection()
+        item.setSelected(True)
     
     def add_defect_by_path(self, path):
         if not os.path.exists(path):
-            return  # 不存在则静默忽略
+            self.statusBar().showMessage("未找到对应的异物图片", 3000)
+            return
 
         pix = QPixmap(path)
         if pix.isNull():
+            self.statusBar().showMessage("异物图片加载失败", 3000)
             return
 
         item = QGraphicsPixmapItem(pix)
         item.setScale(0.2)
         item.setZValue(20)
+        item.setTransformOriginPoint(item.boundingRect().center())
 
         item.setFlags(
             QGraphicsPixmapItem.ItemIsMovable |
             QGraphicsPixmapItem.ItemIsSelectable
         )
 
-        item.setPos(self.scene.sceneRect().center())
+        center = self.scene.sceneRect().center()
+        origin = item.transformOriginPoint()
+        item.setPos(center.x() - origin.x(), center.y() - origin.y())
         self.scene.addItem(item)
+        self.scene.clearSelection()
+        item.setSelected(True)
+        self.statusBar().showMessage("异物插入成功", 3000)
 
     def keyPressEvent(self, event):
         key = event.key()
+
+        if key == Qt.Key_Delete:
+            items = []
+            if isValid(self.scene):
+                try:
+                    items = self.scene.selectedItems()
+                except RuntimeError:
+                    items = []
+            removed_defect = False
+            removed_line = False
+            for item in items:
+                if isinstance(item, QGraphicsPixmapItem) and item is not self.background_item:
+                    self.scene.removeItem(item)
+                    removed_defect = True
+                elif isinstance(item, QGraphicsLineItem):
+                    self.scene.removeItem(item)
+                    removed_line = True
+                    if item is self.active_line_item:
+                        self.active_line_item = None
+                    if item is self.line_item:
+                        self.line_item = None
+
+            if removed_defect:
+                self.active_defect_item = None
+            if removed_line:
+                with QSignalBlocker(self.angle_slider):
+                    self.angle_slider.setValue(0)
+                with QSignalBlocker(self.angle_spin):
+                    self.angle_spin.setValue(0.0)
+
+            if removed_defect or removed_line:
+                if removed_defect and removed_line:
+                    self.statusBar().showMessage("已删除选中内容", 3000)
+                elif removed_defect:
+                    self.statusBar().showMessage("异物已删除", 3000)
+                else:
+                    self.statusBar().showMessage("线已删除", 3000)
+            return
 
         # Qt.Key_1 到 Qt.Key_9 是连续的
         if Qt.Key_1 <= key <= Qt.Key_9:
@@ -337,6 +509,7 @@ class ImageEditor(QMainWindow):
             defect_item = QGraphicsPixmapItem(pix)
             defect_item.setScale(yiwu_scale_map[yiwu_filename])
             defect_item.setRotation(random.uniform(0, 360))  # 异物随机旋转
+            defect_item.setTransformOriginPoint(defect_item.boundingRect().center())
             
             # 3. 计算线上的随机位置（确保异物中心点落在线上）
             # 线的旋转角度转弧度
@@ -387,9 +560,21 @@ class ImageEditor(QMainWindow):
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         self.scene.render(painter, QRectF(pix.rect()), rect)
         painter.end()
-        pix.save(save_path)
+        ok = pix.save(save_path)
         
+        if ok:
+            self.statusBar().showMessage(f"{file_name} 保存成功", 5000)
+        else:
+            self.statusBar().showMessage(f"{file_name} 保存失败", 5000)
         print(f"图片已保存至：{save_path}")
+
+    def closeEvent(self, event):
+        if isValid(self.scene):
+            try:
+                self.scene.selectionChanged.disconnect(self.on_scene_selection_changed)
+            except (RuntimeError, TypeError):
+                pass
+        super().closeEvent(event)
 
 
 if __name__ == "__main__":
