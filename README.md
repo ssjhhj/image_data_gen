@@ -15,3 +15,11 @@ Del，删除线或者异物
 鼠标中间放大或缩小异物和线
 
 自动生成还不完善。
+
+界面如下图
+
+<div align=center>
+<p align="center">
+<img src="User_Interface.png" width="600">
+</p>
+</div>
