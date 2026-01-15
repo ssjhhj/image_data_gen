@@ -1,0 +1,5 @@
+label:
+- color: '#000000'
+  name: __background__
+- color: '#ff3613'
+  name: line

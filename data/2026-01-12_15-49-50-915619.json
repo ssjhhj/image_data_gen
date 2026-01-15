@@ -1,0 +1,45 @@
+{
+    "info": {
+        "description": "ISAT",
+        "folder": "D:/Desktop/XLWD/project/work1/image_data_gen/data",
+        "name": "2026-01-12_15-49-50-915619.png",
+        "width": 1280,
+        "height": 720,
+        "depth": 3,
+        "note": ""
+    },
+    "objects": [
+        {
+            "category": "line",
+            "group": 1,
+            "segmentation": [
+                [
+                    0.31,
+                    305.5
+                ],
+                [
+                    0.16,
+                    311.73
+                ],
+                [
+                    1279.0,
+                    227.29
+                ],
+                [
+                    1279.0,
+                    222.31
+                ]
+            ],
+            "area": 7165.035805511085,
+            "layer": 1.0,
+            "bbox": [
+                -0.34405848326509936,
+                221.8054435351514,
+                1279.5002365577475,
+                312.2253789398721
+            ],
+            "iscrowd": false,
+            "note": ""
+        }
+    ]
+}
